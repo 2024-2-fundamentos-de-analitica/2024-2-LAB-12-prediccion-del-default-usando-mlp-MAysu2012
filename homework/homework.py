@@ -118,8 +118,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 
-def load_datasets(train_path, test_path):
-    """Load and perform initial data cleaning"""
+def load_data(train_path, test_path):
     train_df = pd.read_csv(train_path, index_col=False, compression="zip")
     test_df = pd.read_csv(test_path, index_col=False, compression="zip")
     
@@ -130,7 +129,6 @@ def load_datasets(train_path, test_path):
     return train_df, test_df
 
 def preprocess_data(train_df, test_df):
-    """Clean and preprocess datasets"""
     train_clean = train_df.loc[
         (train_df["MARRIAGE"] != 0) & 
         (train_df["EDUCATION"] != 0)
@@ -163,7 +161,6 @@ def create_model_pipeline(categorical_features, numerical_features):
     ])
 
 def calculate_metrics(y_true, y_pred, dataset_type):
-    """Calculate performance metrics"""
     return {
         "type": "metrics",
         "dataset": dataset_type,
@@ -185,7 +182,7 @@ def calculate_confusion_matrix(y_true, y_pred, dataset_type):
 
 def main():
     # Load and prepare data
-    train_df, test_df = load_datasets(
+    train_df, test_df = load_data(
         "./files/input/train_data.csv.zip",
         "./files/input/test_data.csv.zip"
     )
