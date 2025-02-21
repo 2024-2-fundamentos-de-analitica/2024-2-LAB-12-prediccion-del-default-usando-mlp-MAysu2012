@@ -96,3 +96,160 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import os
+from glob import glob
+from sklearn.neural_network import MLPClassifier
+import pandas as pd
+import gzip
+import pickle
+import json
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    balanced_accuracy_score, 
+    precision_score, 
+    recall_score, 
+    f1_score, 
+    confusion_matrix
+)
+from sklearn.model_selection import GridSearchCV
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+
+def load_datasets(train_path, test_path):
+    """Load and perform initial data cleaning"""
+    train_df = pd.read_csv(train_path, index_col=False, compression="zip")
+    test_df = pd.read_csv(test_path, index_col=False, compression="zip")
+    
+    for df in [train_df, test_df]:
+        df.rename(columns={'default payment next month': "default"}, inplace=True)
+        df.drop(columns=["ID"], inplace=True)
+        
+    return train_df, test_df
+
+def preprocess_data(train_df, test_df):
+    """Clean and preprocess datasets"""
+    train_clean = train_df.loc[
+        (train_df["MARRIAGE"] != 0) & 
+        (train_df["EDUCATION"] != 0)
+    ].copy()
+    
+    test_clean = test_df.loc[
+        (test_df["MARRIAGE"] != 0) & 
+        (test_df["EDUCATION"] != 0)
+    ].copy()
+    
+    for df in [train_clean, test_clean]:
+        df["EDUCATION"] = df["EDUCATION"].apply(lambda x: 4 if x >= 4 else x)
+        
+    return train_clean.dropna(), test_clean.dropna()
+
+def create_model_pipeline(categorical_features, numerical_features):
+    """Create preprocessing and model pipeline"""
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('categorical', OneHotEncoder(), categorical_features),
+            ('scaling', StandardScaler(), numerical_features),
+        ]
+    )
+    
+    return Pipeline([
+        ("data_preprocessor", preprocessor),
+        ('feature_selector', SelectKBest(score_func=f_classif)),
+        ('dim_reduction', PCA()),
+        ('mlp_classifier', MLPClassifier(max_iter=15000, random_state=21))
+    ])
+
+def calculate_metrics(y_true, y_pred, dataset_type):
+    """Calculate performance metrics"""
+    return {
+        "type": "metrics",
+        "dataset": dataset_type,
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1_score": f1_score(y_true, y_pred, zero_division=0),
+    }
+
+def calculate_confusion_matrix(y_true, y_pred, dataset_type):
+    """Calculate and format confusion matrix"""
+    cm = confusion_matrix(y_true, y_pred)
+    return {
+        "type": "cm_matrix",
+        "dataset": dataset_type,
+        "true_0": {"predicted_0": int(cm[0][0]), "predicted_1": int(cm[0][1])},
+        "true_1": {"predicted_0": int(cm[1][0]), "predicted_1": int(cm[1][1])},
+    }
+
+def main():
+    # Load and prepare data
+    train_df, test_df = load_datasets(
+        "./files/input/train_data.csv.zip",
+        "./files/input/test_data.csv.zip"
+    )
+    
+    train_clean, test_clean = preprocess_data(train_df, test_df)
+    
+    # Split features and target
+    x_train = train_clean.drop(columns=["default"])
+    y_train = train_clean["default"]
+    x_test = test_clean.drop(columns=["default"])
+    y_test = test_clean["default"]
+    
+    categorical_cols = ["SEX", "EDUCATION", "MARRIAGE"]
+    numerical_cols = [col for col in x_train.columns if col not in categorical_cols]
+    
+    # Create and configure pipeline
+    pipeline = create_model_pipeline(categorical_cols, numerical_cols)
+    
+    # Define hyperparameters
+    param_grid = {
+        "dim_reduction__n_components": [None],
+        "feature_selector__k": [20],
+        "mlp_classifier__hidden_layer_sizes": [(50, 30, 40, 60)],
+        "mlp_classifier__alpha": [0.26],
+        'mlp_classifier__learning_rate_init': [0.001],
+    }
+    
+    # Perform grid search
+    model = GridSearchCV(
+        estimator=pipeline,
+        param_grid=param_grid,
+        cv=10,
+        scoring='balanced_accuracy',
+        n_jobs=-1,
+        refit=True
+    )
+    
+    model.fit(x_train, y_train)
+    
+    # Save model
+    if os.path.exists("files/models/"):
+        for file in glob(f"files/models/*"):
+            os.remove(file)
+        os.rmdir("files/models/")
+    os.makedirs("files/models/")
+    
+    with gzip.open("files/models/model.pkl.gz", "wb") as f:
+        pickle.dump(model, f)
+    
+    # Generate predictions
+    y_train_pred = model.predict(x_train)
+    y_test_pred = model.predict(x_test)
+    
+    # Calculate metrics
+    train_metrics = calculate_metrics(y_train, y_train_pred, "train")
+    test_metrics = calculate_metrics(y_test, y_test_pred, "test")
+    train_conf = calculate_confusion_matrix(y_train, y_train_pred, "train")
+    test_conf = calculate_confusion_matrix(y_test, y_test_pred, "test")
+    
+    # Save results
+    os.makedirs("files/output/", exist_ok=True)
+    with open("files/output/metrics.json", "w", encoding="utf-8") as file:
+        for metric in [train_metrics, test_metrics, train_conf, test_conf]:
+            file.write(json.dumps(metric) + "\n")
+
+if __name__ == "__main__":
+    main()
